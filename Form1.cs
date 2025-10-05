@@ -6,24 +6,27 @@ namespace ScreenLimiter
 {
     public partial class Form1 : Form
     {
-        private System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
-        private Rectangle limitArea;
-        private IntPtr selectedMonitorHandle;
+        private Rectangle selectedArea = Rectangle.Empty;
+        private IntPtr selectedMonitorHandle = IntPtr.Zero;
+        private System.Windows.Forms.Timer timer; // явный тип
 
         public Form1()
         {
             InitializeComponent();
             LoadMonitors();
 
-            timer.Interval = 200; // Быстрая реакция на разворот окна
-            timer.Tick += (s, e) => LimitWindows(limitArea);
+            timer = new System.Windows.Forms.Timer();
+            timer.Interval = 200;
+            timer.Tick += Timer_Tick;
         }
 
         private void LoadMonitors()
         {
             comboScreens.Items.Clear();
             foreach (var screen in Screen.AllScreens)
+            {
                 comboScreens.Items.Add(screen.DeviceName + $" ({screen.Bounds.Width}x{screen.Bounds.Height})");
+            }
             if (comboScreens.Items.Count > 0)
                 comboScreens.SelectedIndex = 0;
         }
@@ -32,44 +35,40 @@ namespace ScreenLimiter
         {
             if (comboScreens.SelectedIndex < 0) return;
             var screen = Screen.AllScreens[comboScreens.SelectedIndex];
+
             selectedMonitorHandle = screen.GetHmonitor();
 
-            OverlayForm overlay = new OverlayForm(screen);
-            overlay.ShowDialog();
+            using (var overlay = new OverlayForm(screen))
+            {
+                overlay.ShowDialog();
+                selectedArea = overlay.GetAbsoluteRectangle();
+            }
 
-            limitArea = overlay.GetAbsoluteRectangle();
-
-            txtLeft.Text = limitArea.Left.ToString();
-            txtTop.Text = limitArea.Top.ToString();
-            txtWidth.Text = limitArea.Width.ToString();
-            txtHeight.Text = limitArea.Height.ToString();
+            if (selectedArea != Rectangle.Empty)
+                MessageBox.Show($"Выбрана область: {selectedArea.Width}x{selectedArea.Height} на мониторе {comboScreens.SelectedIndex + 1}");
         }
 
         private void btnApply_Click(object sender, EventArgs e)
         {
-            if (limitArea == Rectangle.Empty)
+            if (selectedArea == Rectangle.Empty)
             {
-                MessageBox.Show("Выберите область сначала!");
+                MessageBox.Show("Сначала выделите область.");
                 return;
             }
             timer.Start();
-            MessageBox.Show("🔒 Ограничение окон включено!");
+            MessageBox.Show("Ограничение окон включено.");
         }
 
         private void btnStop_Click(object sender, EventArgs e)
         {
             timer.Stop();
-            MessageBox.Show("⛔ Ограничение окон отключено!");
+            MessageBox.Show("Ограничение окон отключено.");
         }
 
-        private void btnGetResolution_Click(object sender, EventArgs e)
+        private void Timer_Tick(object sender, EventArgs e)
         {
-            if (comboScreens.SelectedIndex < 0) return;
-            var screen = Screen.AllScreens[comboScreens.SelectedIndex];
-            txtLeft.Text = screen.Bounds.Left.ToString();
-            txtTop.Text = screen.Bounds.Top.ToString();
-            txtWidth.Text = screen.Bounds.Width.ToString();
-            txtHeight.Text = screen.Bounds.Height.ToString();
+            if (selectedArea != Rectangle.Empty)
+                LimitWindows(selectedArea);
         }
 
         private void LimitWindows(Rectangle limit)
@@ -79,14 +78,34 @@ namespace ScreenLimiter
                 if (!NativeMethods.IsWindowVisible(hWnd)) return true;
 
                 IntPtr windowMonitor = NativeMethods.MonitorFromWindow(hWnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
-                if (windowMonitor != selectedMonitorHandle) return true; // пропускаем окна на других мониторах
+                if (windowMonitor != selectedMonitorHandle) return true;
 
-                // Принудительно подгоняем размеры под выбранную область
-                NativeMethods.SetWindowPos(hWnd, IntPtr.Zero, limit.Left, limit.Top, limit.Width, limit.Height,
+                NativeMethods.SetWindowPos(hWnd, IntPtr.Zero,
+                    limit.Left, limit.Top, limit.Width, limit.Height,
                     NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
 
                 return true;
             }, IntPtr.Zero);
+        }
+
+        // ---- ЛОГИКА ТРЕЯ ----
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (this.WindowState == FormWindowState.Minimized)
+            {
+                this.Hide();
+                notifyIcon.BalloonTipTitle = "ScreenLimiter";
+                notifyIcon.BalloonTipText = "Приложение свернуто в трей";
+                notifyIcon.ShowBalloonTip(1000);
+            }
+        }
+
+        private void notifyIcon_DoubleClick(object sender, EventArgs e)
+        {
+            this.Show();
+            this.WindowState = FormWindowState.Normal;
+            this.BringToFront();
         }
     }
 }
